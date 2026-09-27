@@ -167,7 +167,7 @@ for odd in "sp ace" 'qu"ote'; do
     bad "root '$odd' did not deny"
   fi
   if "$copy/adapters/hookjson/install.sh" --harness kimi \
-    | python3 -c 'import sys, tomllib; sys.exit(0 if len(tomllib.loads(sys.stdin.read())["hooks"]) == 7 else 1)'; then
+    | python3 -c 'import sys, tomllib; sys.exit(0 if len(tomllib.loads(sys.stdin.read())["hooks"]) == 8 else 1)'; then
     ok "a root named '$odd' round-trips through the kimi TOML parser"
   else
     bad "root '$odd' produced TOML that does not parse"
@@ -211,13 +211,13 @@ else
   bad "the nested target was not created"
 fi
 "$INSTALL" --harness kimi --target "$TMP/kimi-config.toml" >/dev/null 2>&1
-if grep -c '^\[\[hooks\]\]' "$TMP/kimi-config.toml" | grep -qx 7; then
-  ok "kimi appends all seven hook blocks"
+if grep -c '^\[\[hooks\]\]' "$TMP/kimi-config.toml" | grep -qx 8; then
+  ok "kimi appends all eight hook blocks"
 else
   bad "kimi wrote $(grep -c '^\[\[hooks\]\]' "$TMP/kimi-config.toml") blocks"
 fi
 "$INSTALL" --harness kimi --target "$TMP/kimi-config.toml" --force >/dev/null 2>&1
-if grep -c '^\[\[hooks\]\]' "$TMP/kimi-config.toml" | grep -qx 7; then
+if grep -c '^\[\[hooks\]\]' "$TMP/kimi-config.toml" | grep -qx 8; then
   ok "a second kimi install does not duplicate them"
 else
   bad "kimi duplicated blocks on re-install"

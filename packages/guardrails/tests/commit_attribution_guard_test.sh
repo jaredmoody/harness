@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+HOOK="$(cd "$(dirname "$0")/../adapters/hookjson" && pwd)/commit_attribution_guard.py"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+pass=0
+fail=0
+
+run() {
+  python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))
+' "$1" | python3 "$HOOK" 2>/dev/null
+}
+
+run_list() {
+  python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "tool_input": {"command": json.loads(sys.argv[1])}}))
+' "$1" | python3 "$HOOK" 2>/dev/null
+}
+
+verdict_of() {
+  local out="$1"
+  if printf '%s' "$out" | grep -q '"permissionDecision": "deny"'; then
+    printf 'deny'
+  elif printf '%s' "$out" | grep -q '"additionalContext"'; then
+    printf 'warn'
+  else
+    printf 'silent'
+  fi
+}
+
+check() {
+  local expect="$1" name="$2" cmd="$3" out verdict
+  out="$(run "$cmd")"
+  verdict="$(verdict_of "$out")"
+  if [ "$verdict" = "$expect" ]; then
+    pass=$((pass + 1)); printf '  ok   %-56s (%s)\n' "$name" "$verdict"
+  else
+    fail=$((fail + 1)); printf '  FAIL %-56s expected %s, got %s\n' "$name" "$expect" "$verdict"
+    printf '       %s\n' "$out"
+  fi
+}
+
+check_list() {
+  local expect="$1" name="$2" argv_json="$3" out verdict
+  out="$(run_list "$argv_json")"
+  verdict="$(verdict_of "$out")"
+  if [ "$verdict" = "$expect" ]; then
+    pass=$((pass + 1)); printf '  ok   %-56s (%s)\n' "$name" "$verdict"
+  else
+    fail=$((fail + 1)); printf '  FAIL %-56s expected %s, got %s\n' "$name" "$expect" "$verdict"
+    printf '       %s\n' "$out"
+  fi
+}
+
+echo "MUST DENY — the trailer block the agent adds when nobody asked:"
+check deny "the harness co-author trailer" 'git commit -m "fix: empty coupon
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"'
+check deny "a human co-author added by the agent" 'git commit -m "fix: x
+
+Co-authored-by: Someone Else <someone@example.com>"'
+check deny "lower case and no space" 'git commit -m "fix: x
+
+co-authored-by:Claude <a@b>"'
+check deny "the trailer in a second -m" 'git commit -m "fix: x" -m "Co-authored-by: Claude <a@b>"'
+check deny "the --trailer flag" 'git commit --trailer "Co-authored-by: Claude <a@b>" -m "fix: x"'
+check deny "the trailer on an amend" 'git commit --amend -m "fix: x
+
+Co-authored-by: Claude <a@b>"'
+check deny "the trailer behind git -C" 'git -C /srv/repo commit -m "fix: x
+
+Co-authored-by: Claude <a@b>"'
+check deny "the trailer behind git -c user.name=x" 'git -c user.name=agent commit -m "fix: x
+
+Co-authored-by: Claude <a@b>"'
+
+echo
+echo "MUST DENY — the signature, in every shape a harness writes it:"
+check deny "the robot and the marketing link" 'git commit -m "feat: thing
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"'
+check deny "generated with, no emoji" 'git commit -m "feat: thing
+
+Generated with Claude Code"'
+check deny "written by an assistant" 'git commit -m "feat: thing
+
+Written by GPT-5"'
+check deny "an Assisted-by trailer" 'git commit -m "fix: x
+
+Assisted-by: Cursor"'
+check deny "a Signed-off-by naming the tool" 'git commit -m "fix: x
+
+Signed-off-by: Claude <noreply@anthropic.com>"'
+check deny "a dash sign-off" 'git commit -m "fix: x
+
+-- Claude Code"'
+check deny "via the tool" 'git commit -m "fix: x
+
+via Codex"'
+check deny "committing under the tool name" 'git commit --author="Claude <noreply@anthropic.com>" -m "fix: x"'
+
+echo
+echo "THE MESSAGE IS READ WHEREVER IT COMES FROM:"
+check deny "the command-substitution heredoc form" 'git commit -m "$(cat <<'"'"'EOF'"'"'
+fix: x
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+EOF
+)"'
+check deny "a message piped in on -F -" "git commit -F - <<'EOF'
+fix: x
+
+Co-authored-by: Claude <a@b>
+EOF"
+printf 'fix: x\n\nCo-authored-by: Claude <a@b>\n' > "$TMP/msg.txt"
+check deny "a message file named by -F" "git commit -F $TMP/msg.txt"
+check deny "a message file named by --file" "git commit --file=$TMP/msg.txt"
+check deny "after a semicolon" "ls; git commit -m 'fix: x
+
+Co-authored-by: Claude <a@b>'"
+check deny "after a logical and" "git add -A && git commit -m 'fix: x
+
+Co-authored-by: Claude <a@b>'"
+check_list deny "argv form, trailer in the -m value" \
+  '["git","commit","-m","fix: x\n\nCo-authored-by: Claude <a@b>"]'
+
+echo
+echo "MUST STAY SILENT — an ordinary commit is none of the guard's business:"
+check silent "a plain commit" 'git commit -m "fix: handle an empty coupon code"'
+check silent "a commit with a real body" 'git commit -m "fix: x
+
+The parser dropped the last row because the cursor advanced twice."'
+check silent "a human Signed-off-by (DCO)" 'git commit -m "fix: x
+
+Signed-off-by: Jared Moody <jared@example.com>"'
+check silent "the --signoff flag" 'git commit -s -m "fix: x"'
+check silent "a GPG-signed commit" 'git commit -S -m "fix: x"'
+check silent "a subject that names a product" 'git commit -m "fix: parse Copilot webhook payloads"'
+check silent "prose about generated code" 'git commit -m "fix: x
+
+The client was generated by the codegen step and had drifted."'
+check silent "reading trailers out of the log" "git log --format=%B | grep -i co-authored-by"
+check silent "a trailer in a file that is not a commit" 'echo "Co-authored-by: Claude <a@b>" >> /tmp/notes.md'
+check silent "a heredoc script that is never committed" "cat > /tmp/x.sh <<'EOF'
+git commit -m 'Co-authored-by: Claude <a@b>'
+EOF"
+check silent "an empty command" ""
+check silent "a PR body heredoc beside a clean commit" "git commit -m 'chore: bump' && gh pr create --body-file - <<'EOF'
+summary
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF"
+check_list silent "argv gh pr body mentioning the trailer" \
+  '["gh","pr","create","--body","we strip Co-authored-by: trailers"]'
+
+echo
+echo "THE DENIAL CARRIES THE OFFENDING LINE AND THE FIX:"
+out="$(run 'git commit -m "fix: x
+
+Co-Authored-By: Claude <noreply@anthropic.com>"')"
+if printf '%s' "$out" | grep -q 'Co-Authored-By: Claude'; then
+  pass=$((pass + 1)); echo "  ok   the denial quotes the line it refused"
+else
+  fail=$((fail + 1)); printf '  FAIL the denial does not quote the line: %s\n' "$out"
+fi
+if printf '%s' "$out" | grep -q 'GUARDRAILS_ALLOW_COMMIT_ATTRIBUTION=1'; then
+  pass=$((pass + 1)); echo "  ok   the denial names its override"
+else
+  fail=$((fail + 1)); printf '  FAIL the denial does not name the override: %s\n' "$out"
+fi
+if printf '%s' "$out" | grep -q '"hookEventName": "PreToolUse"'; then
+  pass=$((pass + 1)); echo "  ok   the denial is a PreToolUse decision"
+else
+  fail=$((fail + 1)); printf '  FAIL wrong event shape: %s\n' "$out"
+fi
+
+echo
+echo "THE OVERRIDE AND THE NAME LIST ARE HONOURED:"
+out="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))
+' 'git commit -m "fix: x
+
+Co-authored-by: A Human <a@b>"' | GUARDRAILS_ALLOW_COMMIT_ATTRIBUTION=1 python3 "$HOOK" 2>/dev/null)"
+if [ -z "$out" ]; then
+  pass=$((pass + 1)); echo "  ok   GUARDRAILS_ALLOW_COMMIT_ATTRIBUTION=1 stands the guard down"
+else
+  fail=$((fail + 1)); printf '  FAIL the override was ignored: %s\n' "$out"
+fi
+out="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))
+' 'git commit -m "fix: x
+
+Generated with Robo Helper"' | GUARDRAILS_ATTRIBUTION_NAMES="robo helper" python3 "$HOOK" 2>/dev/null)"
+if [ "$(verdict_of "$out")" = "deny" ]; then
+  pass=$((pass + 1)); echo "  ok   GUARDRAILS_ATTRIBUTION_NAMES adds a local tool name"
+else
+  fail=$((fail + 1)); printf '  FAIL the extra name was not used: %s\n' "$out"
+fi
+
+echo
+echo "BROKEN INPUT — must never take the turn down:"
+survives() {
+  local name="$1" stdin="$2"
+  if printf '%s' "$stdin" | python3 "$HOOK" >/dev/null 2>&1; then
+    pass=$((pass + 1)); printf '  ok   %-56s (exit 0)\n' "$name"
+  else
+    fail=$((fail + 1)); printf '  FAIL %-56s did not exit 0\n' "$name"
+  fi
+}
+survives "non-JSON stdin" 'not json'
+survives "an empty payload" '{}'
+survives "an unbalanced quote" \
+  '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"unterminated"}}'
+survives "a message file that does not exist" \
+  '{"tool_name":"Bash","tool_input":{"command":"git commit -F /nope/missing.txt"}}'
+
+echo
+printf '%d passed, %d failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ]

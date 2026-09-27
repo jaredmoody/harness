@@ -13,6 +13,12 @@ timeout = 10
 [[hooks]]
 event = "PreToolUse"
 matcher = "Bash"
+command = "python3 {{GUARDRAILS}}/adapters/hookjson/commit_attribution_guard.py"
+timeout = 10
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
 command = "python3 {{GUARDRAILS}}/adapters/hookjson/review_brevity_guard.py"
 timeout = 10
 

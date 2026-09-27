@@ -13,6 +13,11 @@
             "type": "command",
             "command": "python3 {{GUARDRAILS}}/adapters/hookjson/pkill_self_match_guard.py",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 {{GUARDRAILS}}/adapters/hookjson/commit_attribution_guard.py",
+            "timeout": 10
           }
         ]
       },

@@ -56,6 +56,33 @@ Quoted spans are stripped before matching. The first version matched the words "
 inside an echo string and blocked a read-only `ps` command — the same defect as the truncation
 guard firing on its own test data. Only real command positions count.
 
+## attribution — the trailer block nobody asked for
+
+Every harness ships a commit footer: `Co-Authored-By: Claude <noreply@anthropic.com>`,
+`🤖 Generated with [Claude Code](https://claude.com/claude-code)`, `Generated with Codex`. The
+agent writes it by default, and an instruction not to is exactly the kind of rule a model talks
+itself out of three turns later, because the attribution lines live in the harness's own system
+prompt and outlast any one reminder.
+
+A trailer is not decoration. `git shortlog`, `git log --author`, GitHub's contributor graph and
+every blame-driven reviewer read `Co-authored-by:` as a claim that a second *person* wrote part
+of the change. The signature line is worse: it is permanent. It survives every backport, every
+cherry-pick and every release note built from `git log`, and removing it later means rewriting
+history.
+
+So the guard runs before the commit, not after: a PreToolUse deny is the only verdict that
+leaves nothing to undo. It reads the message wherever it comes from — `-m`, a repeated `-m`,
+`--trailer`, `-F file`, `-F -` with a heredoc, and the `-m "$(cat <<'EOF' … EOF)"` form the
+harnesses actually emit — because a guard that only reads `-m` sees a fraction of the commits,
+which is the comments guard's 1-of-116 failure in a different costume.
+
+Narrow by design. `--signoff` and a human `Signed-off-by:` pass (DCO is a legal attestation by
+the person running it); `-S` and GPG signing pass — "signature" here means a credit line, not
+cryptography; a subject that merely names a tool ("fix: parse Copilot webhook payloads") passes;
+`git log | grep -i co-authored-by` passes, because reading trailers is not adding one. A human
+who genuinely co-wrote the change runs it with `GUARDRAILS_ALLOW_COMMIT_ATTRIBUTION=1` — the
+override is a person's decision, which is the point.
+
 ## truncation — output that landed exactly on its own cap
 
 This is the failure that cost the most in one segfault investigation: 30 lines of a CI config
